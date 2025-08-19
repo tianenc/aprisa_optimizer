@@ -1,0 +1,18 @@
+set_param lpe signoff_model  s_200
+set_param lpe inter_layer_coupling 1
+set_param lpe extract_via_cap 1   
+set_param lpe effort 2   
+set_param lpe coupling_abs_filter 1e-19
+set_param lpe coupling_rel_filter 0.00001
+
+ 
+
+set_param ta driver_cell_analysis_mode advanced
+set_param ta receiver_cell_analysis_mode advanced
+set_param ta waveform_effect_analysis_mode full_design
+set_param ta si_xtalk_model 1
+
+ 
+
+#px
+set_param px total_cap_threshold 0

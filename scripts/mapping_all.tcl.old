@@ -1,0 +1,373 @@
+#############################################################################################################################
+#     User can define competition mapping commands to AP commands                                                           #
+#     Format: user_command {{AP_command} {user_command_option1 ap_command_option1 user_command_option2 ap_command_option2..}#
+############################################################################################################################
+    #append_to_collection {expand_oblist {unique no_duplicate}} \
+    
+set COMMAND_ALIAS_DICT [dict create \
+    Puts       {puts {} } \
+    add_to_collection {expand_oblist {unique no_duplicate}} \
+    index_collection {index_oblist {}} \
+    set_attribute {set_property {} } \
+    set_dont_touch {set_object_dont_touch_property {} } \
+    set_disable_clock_gating_check {set_ta_clock_gating_check_skip {} } \
+    get_designs {get_modules {} }\
+    remove_case_analysis {purge_case_analysis  {} } \
+    get_object_name {get_name_of_object {} } \
+    sizeof_collection {sizeof_oblist {} } \
+    sort_collection {sort_oblist {} } \
+    filter_collection {filter_oblist {} } \
+    reset_path {reset_timing_path {} } \
+    remove_clock {purge_clock {} } \
+    remove_clock_groups {purge_clock_groups {name clock_group_name asynchronous async} } \
+    remove_input_delay {{purge_input_delay } {clock clock quiet silent max "" min ""} } \
+    remove_output_delay {purge_output_delay {clock clock quiet silent max "" min ""} } \
+    remove_generated_clock {purge_clock {} } \
+    get_lib_timing_arcs {get_ta_lib_arc {} } \
+    get_timing_arcs {get_ta_arc {} } \
+    get_timing_arc {get_ta_arc {} } \
+    all_connected {get_all_connected {} } \
+    remove_ideal_network {unset_net_ideal_timing {} } \
+    set_dont_touch_network  {set_opt_dont_touch_cone {} } \
+    all_fanout {{get_all_fanouts } {quiet silent trace_arcs "" trace "" only_cells only_leaf_cell flat skip_hier_pins level pin_level_limit clock_tree clock_tree_only from from_object endpoints_only only_end_pins endpoints only_end_pins}}  \
+    all_fanin {{get_all_fanin } {quiet silent trace_arcs "" trace "" only_cells only_leaf_cell flat skip_hier_pins level pin_level_limit clock_tree clock_tree_only from from_object to to_object}}  \
+    report_timing {report_ta {view working_scenario max_slack only_slack_less_than min_slack only_slack_greater_than} } \
+    win {{if {[current_window] eq ""} {open_layout} else {hide_gui; show_gui}} {} } \
+    define_proc_attribute {{declare_proc_attributes } {info help_info define_args declare_args}} \
+    ]
+
+proc ap_map_command { args } {
+  set pN [lindex [info level 0] 0]
+
+  process_proc_arguments -arguments $args options
+  # parse_args {
+  #        } {
+  #     {-foreign_cmd.arg.req "Foreign command name"}
+  #     {-ap_cmd.arg.req  "Aprisa's command (must be quoted if with options_"}
+  #     {-option_map.arg "Option mapping {<from_foreign_opt> <to_ap_opt> ...}"}
+  #        } $args options
+
+  set foreign_cmd ""
+  if {[info exists options(-foreign_cmd)]} {
+    set foreign_cmd $options(-foreign_cmd)
+  }
+  set ap_cmd ""
+  if {[info exists options(-ap_cmd)]} {
+    set ap_cmd $options(-ap_cmd)
+  }
+  set option_map [list]
+  if {[info exists options(-option_map)]} {
+    set option_map $options(-option_map)
+  }
+  set min_opt_abbrev 1
+
+  if {[info commands $foreign_cmd] eq $foreign_cmd} {
+    puts "Redefining command: $foreign_cmd"
+  }
+
+  if {[info commands [lindex $ap_cmd 0]] ne [lindex $ap_cmd 0]} {
+    puts "Command $ap_cmd is not an Aprisa command"
+  }
+  if {$option_map eq {}} {
+    uplevel \#0 alias $foreign_cmd $ap_cmd
+  } else {
+    set expanded_map [dict create]
+    dict for {fromOpt toOpt} $option_map {
+      if {[string index $fromOpt 0] eq "-"} {
+        set fromOpt [string range $fromOpt 1 end]
+      }
+      if {[string index $toOpt 0] eq "-"} {
+        set toOpt [string range $toOpt 1 end]
+      }
+      set optLen [string length $fromOpt]
+      for {set idx 0} {$idx < $optLen && ($optLen-$idx)>=$min_opt_abbrev} {incr idx} {
+        #dict set expanded_map [string range $fromOpt 0 end-$idx] $toOpt
+        dict set expanded_map [string range $fromOpt 0 end] $toOpt
+      }
+    }
+    set procTemplate {
+      proc $foreign_cmd { args } {
+        set pN [lindex [info level 0] 0]
+        set opt_map {$expanded_map}
+        set newArgs [list]
+        foreach argToken \$args {
+          if {[string index \$argToken 0] eq "-" && [dict exists \$opt_map [string range \$argToken 1 end]]} {
+            lappend newArgs "\-\[dict get \$opt_map [string range \$argToken 1 end]]"
+          } elseif {![regexp combine_oblist $ap_cmd] && ![regexp all_fanout $ap_cmd] && ![regexp all_fanin $ap_cmd] &&  ![regexp purge_input_delay $ap_cmd]  && ![regexp purge_output_delay $ap_cmd]  &&  [regexp \$argToken \$opt_map] } {
+            set string_tmp \[split  \$opt_map " "]
+            set index \[lsearch  \$string_tmp \$argToken]
+            set string_map \[lindex \$string_tmp \[expr \$index + 1]]
+            lappend newArgs \$string_map
+          } else {
+            lappend newArgs \$argToken
+          }
+
+        }
+        puts "run_cmd: $ap_cmd \$newArgs"
+        if {[regexp get_all_fanout $ap_cmd] || [regexp get_all_fanin $ap_cmd]} {
+
+          if {![regexp {\\-quiet} \$newArgs] && ![regexp {\\-silent} \$newArgs] } {
+            lappend newArgs -quiet
+            puts \$newArgs
+          }
+
+          set newArgs_t1 \[string map \{"\- all" " "\} \$newArgs]
+          set newArgs_t \[string map \{"\- " " "\} \$newArgs_t1]
+          set newArgs \$newArgs_t
+          puts \$newArgs
+
+          set newArgs_tmp \$newArgs
+          if {[regexp only_leaf_cell \$newArgs_tmp ]} {
+            if {[regexp only_end_pins \$newArgs_tmp]} {
+              set newArgs \[regsub " - " \[regsub -all " - " \[regsub "only_end_pins" \[regsub "only_leaf_cell" \$newArgs_tmp ""] ""] " "] " -get_leaf_cells_with_end_pins "]
+              puts \$newArgs
+            }
+          }
+
+        }
+        set newArgs_remove_null \$newArgs
+        if {[regexp purge_input_delay $ap_cmd] || [regexp purge_output_delay $ap_cmd]} {
+          puts "orig: \$newArgs_remove_null"
+          set newArgs \[regsub -all \{\\- \}   \$newArgs_remove_null ""\]
+          puts "remove null : \$newArgs"
+        }
+        set newArgs_t \$newArgs
+        set newArgs [string map {\\{\\{ \\{ \\}\\} \\}} \$newArgs_t]
+        puts \$newArgs
+
+        return [eval $ap_cmd \$newArgs]
+      }
+    }
+    set procStr [subst -nocommands $procTemplate]
+    puts "Defining alias command proc {$procStr}"
+    eval uplevel \#0 {$procStr}
+  }
+}
+
+declare_proc_attributes   ap_map_command \
+    -help_info "foreign cmd" \
+    -declare_args {
+  {-foreign_cmd "foreign_cmd" name string required }
+  {-ap_cmd "ap_cmd" name string required }
+  {-option_map "map" name string optional}
+}
+
+dict for {foreign_cmd map_info} $COMMAND_ALIAS_DICT {
+  lassign $map_info ap_cmd option_map
+  ap_map_command \
+      -foreign_cmd $foreign_cmd \
+      -ap_cmd $ap_cmd \
+      -option_map $option_map
+}
+
+alias redirect redirect_to_file
+
+proc setenv { args } {
+  global env
+  set env([lindex $args 0]) [lrange $args 1 end ]
+  return $env([lindex $args 0])
+}
+
+if {[llength  [info  commands  set_clock_exclusivity]]} {
+  puts "Already renamed set_clock_exclusivity"
+} else {
+  rename set_clock_exclusivity ap_set_clock_exclusivity
+}
+
+
+proc report_exceptions {args} {
+  set pN [lindex [info level 0] 0]
+  set opt_map {type {} output {}}
+  set newArgs [list]
+  puts "$args"
+}
+
+proc set_clock_exclusivity {args} {
+  set pN [lindex [info level 0] 0]
+  set opt_map {type {} output {}}
+  set newArgs [list]
+  foreach argToken $args {
+    if {[string index $argToken 0] eq "-" && [dict exists $opt_map [string range $argToken 1 end]]} {
+      lappend newArgs "-[dict get $opt_map [string range $argToken 1 end]]"
+    } elseif {![regexp combine_oblist ap_set_clock_exclusivity] && [regexp $argToken $opt_map] } {
+      set string_tmp [split  $opt_map " "]
+      set index [lsearch  $string_tmp $argToken]
+      set string_map [lindex $string_tmp [expr $index + 1]]
+      lappend newArgs $string_map
+    } else {
+      lappend newArgs $argToken
+    }
+
+  }
+  puts "ap_set_clock_exclusivity $newArgs"
+
+  set newArgs_t1 [string map {"- mux" " "} $newArgs]
+  set newArgs_t2 [string map {"- user_defined" " "} $newArgs_t1]
+  set newArgs_t [string map {"- " " "} $newArgs_t2]
+  set newArgs $newArgs_t
+  set newArgs_t $newArgs
+  set newArgs [string map {\{\{ \{ \}\} \}} $newArgs_t]
+  puts $newArgs
+
+  #return [eval ap_set_clock_exclusivity $newArgs]
+  set cmd  "ap_set_clock_exclusivity $newArgs"
+  puts $cmd
+  eval $cmd
+}
+
+alias get_attribute get_property
+alias foreach_in_collection foreach_in_oblist
+alias remove_from_collection purge_from_oblist
+alias get_attr get_property
+alias -quiet -silent
+alias -hierarchy -hierarchical
+alias pin_direction direction_of_signal
+#alias full_name full_hier_name
+alias parse_proc_arguments process_proc_arguments
+alias -args -arguments
+alias add_to_collection combine_oblist
+alias -unique -no_duplicate
+alias set_disable_clock_gating_check set_ta_clock_gating_check_skip
+alias append_to_collection expand_oblist
+
+proc sh {args} {
+  if {[regexp "rm " $args] && ![regexp " -f" $args]} {
+    set cmd "exec [regsub rm $args "rm -f " ]"
+    eval $cmd
+  }
+}
+
+
+proc get_cell_name { obj } {
+  return [get_prop $obj base_name]
+}
+define_custom_property name -prop_type string -object_class cell -tcl_proc get_cell_name
+
+proc get_cell_full_name { obj } {
+  return [get_prop $obj full_hier_name]
+}
+define_custom_property full_name -prop_type string -object_class cell -tcl_proc get_cell_full_name
+
+
+proc get_cell_ref_name { obj } {
+  return [get_prop $obj master_name]
+}
+define_custom_property ref_name -prop_type string -object_class cell -tcl_proc get_cell_ref_name
+
+proc get_module_ref_name { obj } {
+  return [get_prop $obj master_name]
+}
+define_custom_property ref_name -prop_type string -object_class module_inst -tcl_proc get_module_ref_name
+
+proc get_module_full_name { obj } {
+  return [get_prop $obj full_hier_name]
+}
+define_custom_property full_name -prop_type string -object_class module_inst -tcl_proc get_module_full_name
+
+proc get_cell_full_name { obj } {
+  return [get_prop $obj full_hier_name]
+}
+define_custom_property full_name -prop_type string -object_class cell -tcl_proc get_cell_full_name
+
+proc get_pin_full_name { obj } {
+  return [get_prop $obj full_hier_name]
+}
+define_custom_property full_name -prop_type string -object_class pin -tcl_proc get_pin_full_name
+
+proc get_pin_name { obj } {
+  return [get_prop $obj base_name_id]
+}
+define_custom_property name -prop_type string -object_class pin -tcl_proc get_pin_name
+
+
+
+proc get_pin_is_clock { obj } {
+if {[get_prop [get_cells -rel $obj] is_icg] || [get_prop [get_cell -rel $obj ] is_clock_gating_cell]} { 
+  return [get_prop $obj is_icg_clock]
+} else {
+  return [get_prop $obj is_clock]
+}
+}
+
+define_custom_property is_clock_pin -prop_type string -object_class pin -tcl_proc get_pin_is_clock
+
+
+proc get_port_full_name { obj } {
+  return [get_prop $obj full_hier_name]
+}
+define_custom_property full_name -prop_type string -object_class port -tcl_proc get_port_full_name
+
+proc get_clock_full_name { obj } {
+  return [get_prop $obj full_hier_name]
+}
+define_custom_property full_name -prop_type string -object_class clock -tcl_proc get_clock_full_name
+
+proc get_clock_period { obj } {
+  return [get_prop $obj clock_period]
+}
+define_custom_property period -prop_type string -object_class clock -tcl_proc get_clock_period
+
+
+proc get_net_full_name { obj } {
+  return [get_prop $obj full_hier_name]
+}
+define_custom_property full_name -prop_type oblist -object_class net -tcl_proc get_net_full_name
+
+proc get_clock_source { obj } {
+  return [get_prop $obj source_pins]
+}
+define_custom_property sources -prop_type oblist -object_class clock -tcl_proc get_clock_source
+
+
+proc get_cell_is_combinational  {obj} {
+  if {[get_property $obj object_class] == "cell" && [get_property $obj is_sequential_cell] == "false"} {
+    return true
+  }
+  return false
+}
+
+define_custom_property is_combinational -prop_type bool -object_class cell -tcl_proc get_cell_is_combinational
+
+define_custom_property is_combinational -prop_type bool -object_class module_inst -tcl_proc get_cell_is_combinational
+
+proc get_cell_is_buffer {obj} {
+if {[get_property $obj object_class] == "cell" && [get_property [get_lib_cells -relate_to $obj] is_buffer] == "true"} {
+    return true
+  }
+  return false
+}
+define_custom_property is_buffer  -prop_type bool -object_class cell -tcl_proc get_cell_is_buffer
+
+
+# Example
+#puts "cells: [get_cells * -hierarchical]"
+#puts "is_combinational: [get_property [get_cells * -hierarchical] is_combinational]"
+
+
+proc get_cell_is_memory {obj} {
+  if {[get_property $obj object_class] == "cell" && [get_property $obj is_memory] == "true"} {
+    return true
+  }
+  return false
+}
+
+define_custom_property is_memory_cell -prop_type bool -object_class cell -tcl_proc get_cell_is_memory
+define_custom_property is_memory_cell -prop_type bool -object_class module_inst -tcl_proc get_cell_is_memory
+
+
+
+proc get_cell_is_hierarchical {obj} {
+  if {[get_property $obj object_class] == "module_inst"} {
+    return true
+  }
+  return false
+}
+define_custom_property is_hierarchical -prop_type bool -object_class cell -tcl_proc get_cell_is_hierarchical
+
+##Setting it to 0; for clock_latency_rise_max property
+proc get_clock_latency { obj } {
+  return 0
+}
+define_custom_property clock_latency_rise_max -prop_type int  -object_class clock -tcl_proc get_clock_latency
+
+
